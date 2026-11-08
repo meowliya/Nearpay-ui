@@ -1,6 +1,8 @@
 # NearPay frontend
 
-NearPay is a responsive React + TypeScript frontend concept for a nearby-payments experience. It is a **standalone demo**: there is no backend, authentication, payment processor, or real transaction. Balances, contacts, requests, and activity are sample data; demo interactions live only in browser memory and reset on refresh.
+NearPay is a responsive React + TypeScript frontend for a nearby-payments experience. The interface includes a welcome flow, guest access, Home, Activity, Contacts, Profile, payment review, QR sharing/scanning, and local sign-out.
+
+**Current integration status:** account and payment services are not connected. Names, balances, contacts, and activity are illustrative; payment actions only update activity in the current browser session. Sign-in does not store or transmit credentials. Signing out clears session activity and returns to welcome.
 
 ## Run locally
 
@@ -11,7 +13,7 @@ npm install
 npm run dev
 ```
 
-Open the localhost URL printed by Vite (normally `http://localhost:5173`). Start with **Explore the demo**, then try Home, transaction history, contacts, profile, and the send/receive/scan flows. The send flow has a review and confirmation step; confirming changes only the sample activity shown in the page.
+Open the localhost URL printed by Vite (normally `http://localhost:5173`). Try navigating between pages, reviewing a payment, searching contacts, sharing/scanning a QR code, and signing out from Profile.
 
 ## Test and build
 
@@ -24,9 +26,9 @@ npm run build
 
 ## Browser capabilities
 
-- **Receive QR:** creates a scannable code containing only a `nearpay-demo://` sample address. It cannot initiate or receive a payment.
-- **Scan:** camera scanning requires camera permission and browser support for the Barcode Detection API (currently available only in some browsers). If camera access or QR detection is unavailable, paste a code in the manual field. The code is only displayed for review.
-- **Nearby devices:** uses the browser's Bluetooth device chooser when Web Bluetooth is available. Device discovery requires a compatible browser and HTTPS or `localhost`; selecting a device does not connect to a payment reader.
-- **Sign in / create account:** UI preview only. Credentials are not stored or transmitted, and no account is created.
+- **Receive QR:** creates a scannable code with a NearPay address. It cannot initiate or receive a payment while payment services are disconnected.
+- **Scan:** camera scanning requires camera permission and browser support for the Barcode Detection API. If camera access or QR detection is unavailable, paste a code in the manual field. The code is only displayed for review.
+- **Nearby devices:** uses the browser's Bluetooth device chooser when Web Bluetooth is available. Device discovery requires a compatible browser and HTTPS or `localhost`; selecting a device does not connect a payment reader.
+- **Sign in:** the interface is present, but account access is not available until an authentication service is connected.
 
-The GitHub repository for this frontend is [meowliya/Nearpay-ui](https://github.com/meowliya/Nearpay-ui). The configured `origin` points to that repository.
+The GitHub repository for this frontend is [meowliya/Nearpay-ui](https://github.com/meowliya/Nearpay-ui).
