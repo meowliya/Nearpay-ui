@@ -112,7 +112,7 @@ function App() {
   const [filter, setFilter] = useState<"All" | "Paid" | "Received">("All");
   const [notice, setNotice] = useState("");
   const [paymentStep, setPaymentStep] = useState<"details" | "review" | "success">("details");
-  const [demoTransactions, setDemoTransactions] = useState(transactions);
+  const [activity, setActivity] = useState(transactions);
   const [incomingRequests, setIncomingRequests] = useState(initialRequests);
   const [scanText, setScanText] = useState("");
   const [cameraActive, setCameraActive] = useState(false);
@@ -123,6 +123,8 @@ function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<number | null>(null);
+  const modalRef = useRef<HTMLElement | null>(null);
+  const modalOpenerRef = useRef<HTMLElement | null>(null);
   const numericAmount = Number(amount);
   const amountError = amount !== "" && (!Number.isFinite(numericAmount) || numericAmount <= 0 || numericAmount > 100000);
 
@@ -131,14 +133,17 @@ function App() {
     [query],
   );
   const visibleTransactions = useMemo(
-    () => demoTransactions.filter((transaction) =>
+    () => activity.filter((transaction) =>
       (filter === "All" || (filter === "Paid" ? transaction.amount < 0 : transaction.amount > 0))
       && `${transaction.name} ${transaction.handle} ${transaction.note}`.toLowerCase().includes(query.toLowerCase()),
     ),
-    [demoTransactions, filter, query],
+    [activity, filter, query],
   );
 
   function startFlow(nextFlow: Exclude<Flow, null>, contact = contacts[0]) {
+    if (flow === null) {
+      modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
     setSelectedContact(contact);
     setAmount("");
     setNote("");
@@ -156,6 +161,11 @@ function App() {
     stopCamera();
     setFlow(null);
     setPaymentStep("details");
+    const opener = modalOpenerRef.current;
+    modalOpenerRef.current = null;
+    if (opener?.isConnected) window.setTimeout(() => {
+      if (!modalRef.current && opener.isConnected) opener.focus();
+    }, 0);
   }
 
   function stopCamera() {
@@ -171,18 +181,61 @@ function App() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
   }, []);
 
-  function reviewDemo() {
+  useEffect(() => {
+    if (!flow || !modalRef.current) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const getFocusable = () => Array.from(
+      modalRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    );
+    document.body.style.overflow = "hidden";
+    getFocusable()[0]?.focus();
+
+    function handleModalKeys(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeFlow();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        event.preventDefault();
+        modalRef.current?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleModalKeys);
+    return () => {
+      document.removeEventListener("keydown", handleModalKeys);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [flow]);
+
+  function reviewPayment() {
     if (!amount || amountError) return;
     setPaymentStep("review");
   }
 
-  function confirmDemo() {
+  function recordPayment() {
     if (!amount || amountError) return;
-    setDemoTransactions((current) => [{
+    setActivity((current) => [{
       ...selectedContact,
       amount: -Number(amount),
       date: "Just now",
-      note: note || "Demo payment",
+      note: note || "Payment",
       handle: selectedContact.handle,
       name: selectedContact.name,
     }, ...current]);
@@ -192,16 +245,36 @@ function App() {
   function respondToRequest(request: IncomingRequest, accept: boolean) {
     setIncomingRequests((current) => current.filter((item) => item.id !== request.id));
     if (accept) {
-      setDemoTransactions((current) => [{
+      setActivity((current) => [{
         ...request,
         amount: -request.amount,
         date: "Just now",
         note: `Accepted request · ${request.note}`,
       }, ...current]);
-      showNotice(`Demo request marked paid. No money was moved.`);
+      showNotice("Request recorded locally. No payment was made.");
     } else {
-      showNotice("Demo request declined.");
+      showNotice("Request declined.");
     }
+  }
+
+  function signOut() {
+    stopCamera();
+    setScreen("Home");
+    setQuery("");
+    setFilter("All");
+    setAmount("");
+    setNote("");
+    setPaymentStep("details");
+    setActivity(transactions);
+    setIncomingRequests(initialRequests);
+    setScanText("");
+    setCameraError("");
+    setFoundDevice("");
+    setDeviceError("");
+    setAuthMessage("");
+    setNotice("");
+    modalOpenerRef.current = null;
+    setFlow("onboard");
   }
 
   async function startCamera() {
@@ -212,11 +285,11 @@ function App() {
       };
     }).BarcodeDetector;
     if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError("Camera access is not available here. Enter a demo code below instead.");
+      setCameraError("Camera access is not available here. Enter a NearPay code below instead.");
       return;
     }
     if (!BrowserBarcodeDetector) {
-      setCameraError("This browser does not support QR detection. Enter a demo code below instead.");
+      setCameraError("This browser does not support QR detection. Enter a code below instead.");
       return;
     }
     try {
@@ -294,7 +367,7 @@ function App() {
         <div className="sidebar-label">MENU</div>
         <nav className="side-nav" aria-label="Main navigation">
           {navItems.map((item) => (
-            <button key={item.label} className={`nav-link ${screen === item.label ? "active" : ""}`} onClick={() => { setScreen(item.label); setQuery(""); }}>
+            <button key={item.label} aria-current={screen === item.label ? "page" : undefined} className={`nav-link ${screen === item.label ? "active" : ""}`} onClick={() => { setScreen(item.label); setQuery(""); }}>
               <Icon name={item.icon} size={19} /><span>{item.label}</span>
             </button>
           ))}
@@ -303,8 +376,8 @@ function App() {
           <div className="sidebar-tip">
             <div className="tip-icon"><Icon name="shield" size={18} /></div>
             <strong>Nearby, simply.</strong>
-            <p>A friendly preview of payments made close by.</p>
-            <button className="text-button" onClick={() => showNotice("This frontend demo does not connect to a payment service.")}>Learn more <Icon name="arrow" size={14} /></button>
+            <p>Send and receive with people in your circle.</p>
+            <button className="text-button" onClick={() => showNotice("Account and payment services are not connected in this build.")}>Learn more <Icon name="arrow" size={14} /></button>
           </div>
           <div className="sidebar-user">
             <Avatar initials="S" color="green" size="small" />
@@ -319,14 +392,14 @@ function App() {
           <div className="mobile-brand"><span className="brand-mark">N</span> Near<span className="brand-light">Pay</span></div>
           <div className="breadcrumb"><span>Workspace</span><Icon name="chevron" size={14} /><strong>{screen}</strong></div>
           <div className="topbar-actions">
-            <span className="demo-pill"><i /> Demo mode</span>
-            <button className="icon-button notification-button" aria-label="Notifications" onClick={() => showNotice("You're all caught up.")}><Icon name="bell" size={19} /><i /></button>
+            <span className="connection-pill" title="No account or payment service is connected"><i /> Not connected</span>
+            <button className="icon-button notification-button" aria-label="Notifications" onClick={() => showNotice("No new notifications.")}><Icon name="bell" size={19} /><i /></button>
             <Avatar initials="S" color="green" size="small" />
           </div>
         </header>
 
         <div className="page-content">
-          {screen === "Home" && <HomeScreen onFlow={startFlow} onNavigate={setScreen} items={demoTransactions} onScan={() => startFlow("scan")} onDiscover={discoverDevice} foundDevice={foundDevice} deviceError={deviceError} />}
+          {screen === "Home" && <HomeScreen onFlow={startFlow} onNavigate={setScreen} items={activity} onScan={() => startFlow("scan")} />}
           {screen === "History" && (
             <HistoryScreen
               query={query}
@@ -344,11 +417,11 @@ function App() {
               onPay={(contact) => startFlow("pay", contact)}
             />
           )}
-          {screen === "Profile" && <ProfileScreen onReceive={() => startFlow("receive")} onNotice={showNotice} onSignIn={() => startFlow("signin")} onScan={() => startFlow("scan")} onDiscover={discoverDevice} foundDevice={foundDevice} deviceError={deviceError} />}
+          {screen === "Profile" && <ProfileScreen onReceive={() => startFlow("receive")} onNotice={showNotice} onSignIn={() => startFlow("signin")} onSignOut={signOut} onScan={() => startFlow("scan")} onDiscover={discoverDevice} foundDevice={foundDevice} deviceError={deviceError} />}
           {(screen === "Home" || screen === "History") && incomingRequests.length > 0 && (
             <section className="panel incoming-requests">
               <div className="section-heading">
-                <div><h2>Incoming requests</h2><p>Review carefully. Marking paid only updates this demo.</p></div>
+                <div><h2>Incoming requests</h2><p>Requests are stored on this device. Payments aren’t connected.</p></div>
                 <span className="request-count">{incomingRequests.length}</span>
               </div>
               {incomingRequests.map((request) => (
@@ -362,12 +435,12 @@ function App() {
             </section>
           )}
         </div>
-        <footer className="page-footer"><span>NearPay preview</span><span>Local demo content · No real payments</span></footer>
+        <footer className="page-footer"><span>NearPay</span><span>Accounts and payments aren’t connected in this build.</span></footer>
       </main>
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
         {navItems.map((item) => (
-          <button key={item.label} className={screen === item.label ? "active" : ""} onClick={() => { setScreen(item.label); setQuery(""); }}>
+          <button key={item.label} aria-current={screen === item.label ? "page" : undefined} className={screen === item.label ? "active" : ""} onClick={() => { setScreen(item.label); setQuery(""); }}>
             <Icon name={item.icon} size={19} /><span>{item.label}</span>
           </button>
         ))}
@@ -375,57 +448,57 @@ function App() {
 
       {flow && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeFlow(); }}>
-          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+          <section ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabIndex={-1}>
             <button className="icon-button modal-close" aria-label="Close dialog" onClick={closeFlow}><Icon name="close" /></button>
             {flow === "onboard" ? (
               <>
-                <div className="modal-kicker"><span className="kicker-icon"><Icon name="shield" size={17} /></span> A FRIENDLY PREVIEW</div>
+                <div className="modal-kicker"><span className="kicker-icon"><Icon name="shield" size={17} /></span> WELCOME</div>
                 <h2 id="modal-title">Welcome to NearPay</h2>
-                <p className="modal-description">Explore a local-only payments interface. All balances, people, and activity are sample data; nothing here moves money.</p>
-                <div className="onboarding-points"><span><Icon name="check" size={15} /> Try a simulated send and review</span><span><Icon name="qr" size={15} /> View or scan a demo QR code</span><span><Icon name="shield" size={15} /> No account or payment service connected</span></div>
-                <button className="button button-primary button-full" onClick={closeFlow}>Explore the demo <Icon name="arrow" size={16} /></button>
-                <button className="button button-secondary button-full" onClick={() => startFlow("signin")}>Sign in / create account</button>
+                <p className="modal-description">A simpler way to share with people nearby. Continue to explore NearPay.</p>
+                <div className="onboarding-points"><span><Icon name="check" size={15} /> Review payments before confirming</span><span><Icon name="qr" size={15} /> Share or scan a NearPay code</span><span><Icon name="shield" size={15} /> Accounts and payments aren’t connected in this build</span></div>
+                <button className="button button-primary button-full" onClick={closeFlow}>Continue as guest <Icon name="arrow" size={16} /></button>
+                <button className="button button-secondary button-full" onClick={() => startFlow("signin")}>Sign in</button>
               </>
             ) : flow === "signin" ? (
               <>
-                <div className="modal-kicker"><span className="kicker-icon"><Icon name="profile" size={17} /></span> ACCOUNT PREVIEW</div>
-                <h2 id="modal-title">Sign in or create an account</h2>
-                <p className="modal-description">Account access is not connected in this demo. You can explore without entering personal details.</p>
+                <div className="modal-kicker"><span className="kicker-icon"><Icon name="profile" size={17} /></span> YOUR ACCOUNT</div>
+                <h2 id="modal-title">Sign in</h2>
+                <p className="modal-description">Account access isn’t connected in this build. You can continue as a guest.</p>
                 <form onSubmit={(event) => { event.preventDefault(); setAuthMessage("Sign-in is not connected. Your details were not saved or sent."); }}>
-                  <label className="field-label" htmlFor="demo-email">Email address</label>
-                  <input className="text-input" id="demo-email" type="email" placeholder="you@example.com" autoComplete="email" required />
-                  <label className="field-label" htmlFor="demo-password">Password</label>
-                  <input className="text-input" id="demo-password" type="password" placeholder="Enter a demo password" autoComplete="current-password" required />
+                  <label className="field-label" htmlFor="signin-email">Email address</label>
+                  <input className="text-input" id="signin-email" type="email" placeholder="you@example.com" autoComplete="email" required />
+                  <label className="field-label" htmlFor="signin-password">Password</label>
+                  <input className="text-input" id="signin-password" type="password" placeholder="Enter your password" autoComplete="current-password" required />
                   <button className="button button-primary button-full" type="submit">Continue</button>
                 </form>
                 {authMessage && <p className="auth-message" role="status">{authMessage}</p>}
-                <p className="demo-warning"><Icon name="shield" size={16} /> Demo only. Credentials are not stored or transmitted.</p>
+                <p className="connection-note"><Icon name="shield" size={16} /> Sign-in isn’t available yet. Credentials aren’t saved or sent.</p>
                 <button className="button button-outline button-full" onClick={closeFlow}>Continue as guest</button>
               </>
             ) : flow === "pay" ? (
               <>
-                <div className="modal-kicker"><span className="kicker-icon"><Icon name="send" size={17} /></span> PAYMENT PREVIEW · {paymentStep === "details" ? "1 OF 2" : paymentStep === "review" ? "2 OF 2" : "COMPLETE"}</div>
-                <h2 id="modal-title">{paymentStep === "details" ? "Send a demo payment" : paymentStep === "review" ? "Review before confirming" : "Demo complete"}</h2>
+                <div className="modal-kicker"><span className="kicker-icon"><Icon name="send" size={17} /></span> SEND PAYMENT · {paymentStep === "details" ? "1 OF 2" : paymentStep === "review" ? "2 OF 2" : "COMPLETE"}</div>
+                <h2 id="modal-title">{paymentStep === "details" ? "Send money" : paymentStep === "review" ? "Review before confirming" : "Payment recorded"}</h2>
                 {paymentStep === "success" ? (
                   <>
-                    <div className="payment-success"><span><Icon name="check" size={24} /></span><strong>{formatCurrency(Number(amount))}</strong><p>Demo activity for {selectedContact.name} was updated.</p></div>
-                    <p className="demo-warning"><Icon name="shield" size={16} /> No money was sent or received. This is illustrative activity only.</p>
+                    <div className="payment-success"><span><Icon name="check" size={24} /></span><strong>{formatCurrency(Number(amount))}</strong><p>Activity for {selectedContact.name} was updated on this device.</p></div>
+                    <p className="connection-note"><Icon name="shield" size={16} /> Payment services aren’t connected. No money was sent.</p>
                     <button className="button button-primary button-full" onClick={closeFlow}>Done</button>
                   </>
                 ) : paymentStep === "review" ? (
                   <>
-                    <p className="modal-description">Check the recipient and amount. Confirmation updates only the sample activity list.</p>
+                    <p className="modal-description">Check the recipient and amount. Confirming updates activity on this device only.</p>
                     <div className="payment-review"><Avatar initials={selectedContact.initials} color={selectedContact.color} /><div><strong>{selectedContact.name}</strong><span>{selectedContact.handle}</span></div><b>{formatCurrency(Number(amount))}</b></div>
                     {note && <p className="review-note">“{note}”</p>}
-                    <p className="demo-warning"><Icon name="shield" size={16} /> Demo only. No real payment can be made here.</p>
-                    <button className="button button-primary button-full" onClick={confirmDemo}>Confirm demo payment</button>
+                    <p className="connection-note"><Icon name="shield" size={16} /> Payment services aren’t connected. No money will be sent.</p>
+                    <button className="button button-primary button-full" onClick={recordPayment}>Confirm payment</button>
                     <button className="button button-outline button-full" onClick={() => setPaymentStep("details")}>Back to edit</button>
                   </>
                 ) : <>
-                <p className="modal-description">Choose a demo contact and enter an amount to preview the confirmation step.</p>
+                <p className="modal-description">Choose a person and enter an amount to review your payment.</p>
                 <div className="recipient-card">
                   <Avatar initials={selectedContact.initials} color={selectedContact.color} />
-                  <div><strong>{selectedContact.name}</strong><span>{selectedContact.handle} · Demo contact</span></div>
+                  <div><strong>{selectedContact.name}</strong><span>{selectedContact.handle}</span></div>
                 </div>
                 <label className="field-label" htmlFor="pay-contact">Choose another person</label>
                 <select id="pay-contact" className="text-input" value={selectedContact.handle} onChange={(event) => setSelectedContact(contacts.find((contact) => contact.handle === event.target.value) ?? contacts[0])}>
@@ -436,25 +509,25 @@ function App() {
                 {amountError && <p className="field-error" id="amount-error">Enter an amount between ₹1 and ₹1,00,000.</p>}
                 <label className="field-label" htmlFor="note">Note <span>Optional</span></label>
                 <input className="text-input" id="note" maxLength={40} placeholder="What’s it for?" value={note} onChange={(event) => setNote(event.target.value)} />
-                <p className="demo-warning"><Icon name="shield" size={16} /> Demo only. No real money will be transferred.</p>
-                <button className="button button-primary button-full" disabled={!amount || amountError} onClick={reviewDemo}>Review payment <Icon name="arrow" size={17} /></button>
+                <p className="connection-note"><Icon name="shield" size={16} /> Payments aren’t connected. This will only update activity on this device.</p>
+                <button className="button button-primary button-full" disabled={!amount || amountError} onClick={reviewPayment}>Review payment <Icon name="arrow" size={17} /></button>
                 </>}
               </>
             ) : flow === "receive" ? (
               <>
                 <div className="modal-kicker"><span className="kicker-icon"><Icon name="qr" size={17} /></span> RECEIVE MONEY</div>
-                <h2 id="modal-title">Your demo QR code</h2>
-                <p className="modal-description">Share this sample code with someone nearby. It is not connected to a payment service.</p>
-                <div className="receive-qr"><QRCodeSVG value="nearpay-demo://pay/shahan01" size={150} level="M" includeMargin aria-label="Scannable NearPay demo QR code" /></div>
-                <div className="qr-identity"><Avatar initials="S" color="green" size="small" /><div><strong>Shahan</strong><span>@shahan01 · Demo account</span></div><button className="icon-button" aria-label="Copy demo handle" onClick={() => showNotice("Demo handle copied (preview only).")}><Icon name="copy" size={17} /></button></div>
-                <p className="demo-warning"><Icon name="shield" size={16} /> This scannable code is illustrative and cannot request or receive funds.</p>
+                <h2 id="modal-title">Your NearPay code</h2>
+                <p className="modal-description">Share this code so someone nearby can open your NearPay profile.</p>
+                <div className="receive-qr"><QRCodeSVG value="nearpay://pay/shahan01" size={150} level="M" includeMargin aria-label="Scannable NearPay code" /></div>
+                <div className="qr-identity"><Avatar initials="S" color="green" size="small" /><div><strong>Shahan</strong><span>@shahan01 · Guest profile</span></div><button className="icon-button" aria-label="Copy NearPay handle" onClick={() => showNotice("NearPay handle copied.")}><Icon name="copy" size={17} /></button></div>
+                <p className="connection-note"><Icon name="shield" size={16} /> Payments aren’t connected. This code cannot request or transfer money.</p>
                 <button className="button button-secondary button-full" onClick={closeFlow}>Done</button>
               </>
             ) : flow === "scan" ? (
               <>
-                <div className="modal-kicker"><span className="kicker-icon"><Icon name="scan" size={17} /></span> QR SCANNER PREVIEW</div>
+                <div className="modal-kicker"><span className="kicker-icon"><Icon name="scan" size={17} /></span> SCAN A CODE</div>
                 <h2 id="modal-title">Scan a NearPay code</h2>
-                <p className="modal-description">Allow camera access to scan a QR code, or paste a demo code below.</p>
+                <p className="modal-description">Allow camera access to scan a QR code, or paste a code below.</p>
                 <div className={`scanner-frame ${cameraActive ? "scanner-active" : ""}`}>
                   <video ref={videoRef} autoPlay muted playsInline aria-label="QR scanner camera preview" />
                   {!cameraActive && <div><Icon name="scan" size={31} /><span>Camera preview</span></div>}
@@ -462,12 +535,12 @@ function App() {
                 </div>
                 <button className="button button-outline button-full" onClick={cameraActive ? stopCamera : startCamera}>{cameraActive ? "Stop camera" : "Use camera to scan"}</button>
                 {cameraError && <p className="scanner-error" role="alert">{cameraError}</p>}
-                <div className="scanner-or">or enter code manually</div>
-                <label className="field-label" htmlFor="scan-code">Demo code</label>
-                <input className="text-input" id="scan-code" value={scanText} onChange={(event) => setScanText(event.target.value)} placeholder="nearpay-demo://..." />
+                <div className="scanner-or">or enter a code manually</div>
+                <label className="field-label" htmlFor="scan-code">NearPay code</label>
+                <input className="text-input" id="scan-code" value={scanText} onChange={(event) => setScanText(event.target.value)} placeholder="Paste a NearPay code" />
                 {scanText && <p className="scan-review" role="status">Code ready to review: <code>{scanText}</code></p>}
-                <button className="button button-primary button-full" disabled={!scanText.trim()} onClick={() => { showNotice("Code reviewed locally. No payment was made."); closeFlow(); }}>Review code</button>
-                <p className="demo-warning"><Icon name="shield" size={16} /> Scanning only reads a code. It never sends money.</p>
+                <button className="button button-primary button-full" disabled={!scanText.trim()} onClick={() => { showNotice("Code reviewed. Payments aren’t connected."); closeFlow(); }}>Review code</button>
+                <p className="connection-note"><Icon name="shield" size={16} /> Scanning opens a code for review. It cannot make a payment.</p>
               </>
             ) : null}
           </section>
@@ -482,14 +555,11 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow: string;
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div>;
 }
 
-function HomeScreen({ onFlow, onNavigate, items, onScan, onDiscover, foundDevice, deviceError }: {
+function HomeScreen({ onFlow, onNavigate, items, onScan }: {
   onFlow: (flow: Exclude<Flow, null>, contact?: typeof contacts[number]) => void;
   onNavigate: (screen: Screen) => void;
   items: Transaction[];
   onScan: () => void;
-  onDiscover: () => void;
-  foundDevice: string;
-  deviceError: string;
 }) {
   return (
     <>
@@ -497,9 +567,9 @@ function HomeScreen({ onFlow, onNavigate, items, onScan, onDiscover, foundDevice
       <div className="home-grid">
         <div className="home-main-column">
           <section className="balance-card">
-            <div className="balance-top"><span><span className="balance-dot" /> DEMO WALLET BALANCE <span className="info-dot">i</span></span><span className="balance-label">Illustrative only</span></div>
+            <div className="balance-top"><span><span className="balance-dot" /> EXAMPLE BALANCE <span className="info-dot">i</span></span><span className="balance-label">Not a real balance</span></div>
             <div className="balance-amount">{formatCurrency(2500)}<span>.00</span></div>
-            <div className="balance-bottom"><span>Sample balance for interface preview</span><span className="wallet-art"><span>₹</span></span></div>
+            <div className="balance-bottom"><span>Payments aren’t connected</span><span className="wallet-art"><span>₹</span></span></div>
             <span className="balance-orb orb-one" /><span className="balance-orb orb-two" />
           </section>
 
@@ -510,33 +580,31 @@ function HomeScreen({ onFlow, onNavigate, items, onScan, onDiscover, foundDevice
           </section>
 
           <section className="panel nearby-panel">
-            <div className="section-heading"><div><h2>Nearby devices</h2><p>Find a browser-visible Bluetooth device</p></div><button className="connect-button" onClick={onDiscover}><Icon name="plus" size={14} /> Find devices</button></div>
+            <div className="section-heading"><div><h2>People</h2><p>People you can share with</p></div><button className="connect-button" onClick={() => onNavigate("Contacts")}>View all <Icon name="chevron" size={14} /></button></div>
             <div className="nearby-list">
               {contacts.slice(0, 3).map((contact) => (
                 <div className="nearby-person" key={contact.handle}>
                   <Avatar initials={contact.initials} color={contact.color} size="small" />
-                  <div className="nearby-person-info"><strong>{contact.name}</strong><span>Sample contact · not discovered</span></div>
-                  <button className="connect-button" onClick={() => onFlow("pay", contact)}>Request <Icon name="arrow" size={14} /></button>
+                  <div className="nearby-person-info"><strong>{contact.name}</strong><span>{contact.handle}</span></div>
+                  <button className="connect-button" onClick={() => onFlow("pay", contact)}>Send <Icon name="arrow" size={14} /></button>
                 </div>
               ))}
             </div>
-            <p className="nearby-disclaimer">Discovery only; no payment reader or payment service is connected.</p>
-            {foundDevice && <p className="device-result" role="status"><i /> Found {foundDevice} · not connected</p>}
-            {deviceError && <p className="scanner-error" role="alert">{deviceError}</p>}
+            <p className="nearby-disclaimer">Example contacts. Contact syncing isn’t connected.</p>
           </section>
         </div>
         <div className="home-side-column">
           <section className="panel activity-panel">
-            <div className="section-heading"><div><h2>Recent activity</h2><p>Your demo transaction list</p></div><button className="link-button" onClick={() => onNavigate("History")}>See all <Icon name="arrow" size={14} /></button></div>
+            <div className="section-heading"><div><h2>Recent activity</h2><p>Your latest activity</p></div><button className="link-button" onClick={() => onNavigate("History")}>See all <Icon name="arrow" size={14} /></button></div>
             <div className="activity-list">
               {items.slice(0, 4).map((item, index) => <TransactionRow key={`${item.name}-${item.date}-${index}`} item={item} compact />)}
             </div>
-            <div className="sample-note"><Icon name="shield" size={15} /> All activity shown is illustrative demo data.</div>
+            <div className="activity-note"><Icon name="shield" size={15} /> Activity shown is example data.</div>
           </section>
           <section className="panel discover-panel">
             <div className="discover-art"><span className="discover-card">₹</span><span className="discover-sparkle sparkle-a">✳</span><span className="discover-sparkle sparkle-b">✳</span></div>
-            <div className="eyebrow">PAYMENT, SIMPLIFIED</div><h2>Right here.<br />Right nearby.</h2><p>Explore a preview of connecting with people around you.</p>
-            <button className="link-button" onClick={() => onFlow("pay")}>Try a demo request <Icon name="arrow" size={14} /></button>
+            <div className="eyebrow">PAYMENT, SIMPLIFIED</div><h2>Right here.<br />Right nearby.</h2><p>Share with people in your circle.</p>
+            <button className="link-button" onClick={() => onFlow("pay")}>Send money <Icon name="arrow" size={14} /></button>
           </section>
         </div>
       </div>
@@ -549,7 +617,7 @@ function TransactionRow({ item, compact = false }: { item: typeof transactions[n
     <div className={`transaction-row ${compact ? "transaction-compact" : ""}`}>
       <Avatar initials={item.initials} color={item.color} size="small" />
       <div className="transaction-info"><strong>{item.name}</strong><span>{item.note} <span className="transaction-separator">·</span> {item.date}</span></div>
-      <div className="transaction-amount"><strong className={item.amount > 0 ? "amount-in" : ""}>{item.amount > 0 ? "+" : "−"}{formatCurrency(Math.abs(item.amount))}</strong><span className="status-pill">Demo</span></div>
+      <div className="transaction-amount"><strong className={item.amount > 0 ? "amount-in" : ""}>{item.amount > 0 ? "+" : "−"}{formatCurrency(Math.abs(item.amount))}</strong><span className="status-pill">Example</span></div>
     </div>
   );
 }
@@ -557,7 +625,7 @@ function TransactionRow({ item, compact = false }: { item: typeof transactions[n
 function HistoryScreen({ query, onQuery, filter, onFilter, items }: { query: string; onQuery: (value: string) => void; filter: "All" | "Paid" | "Received"; onFilter: (filter: "All" | "Paid" | "Received") => void; items: typeof transactions }) {
   return (
     <>
-      <PageHeading eyebrow="YOUR ACTIVITY" title="Transaction history" description="A clear view of your demo activity." />
+      <PageHeading eyebrow="YOUR ACTIVITY" title="Transaction history" description="A clear view of your activity." />
       <section className="panel full-panel">
         <div className="history-toolbar">
           <div className="filter-tabs" role="tablist" aria-label="Filter transactions">
@@ -565,9 +633,9 @@ function HistoryScreen({ query, onQuery, filter, onFilter, items }: { query: str
           </div>
           <SearchBox value={query} onChange={onQuery} placeholder="Search activity..." />
         </div>
-        <div className="history-date"><span>DEMO ACTIVITY</span><span>All amounts in INR</span></div>
+        <div className="history-date"><span>ACTIVITY</span><span>All amounts in INR</span></div>
         {items.length > 0 ? <div className="history-list">{items.map((item) => <TransactionRow key={`${item.name}-${item.date}`} item={item} />)}</div> : <EmptyState title="No activity found" description="Try a different search or activity filter." />}
-        <div className="history-disclaimer"><Icon name="shield" size={16} /> This history is sample content for the frontend preview. It is not financial data.</div>
+        <div className="history-disclaimer"><Icon name="shield" size={16} /> Example activity only. This build is not connected to a payment service.</div>
       </section>
     </>
   );
@@ -580,59 +648,60 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
 function ContactsScreen({ query, onQuery, items, onPay }: { query: string; onQuery: (value: string) => void; items: typeof contacts; onPay: (contact: typeof contacts[number]) => void }) {
   return (
     <>
-      <PageHeading eyebrow="YOUR PEOPLE" title="Contacts" description="People in this demo, ready to connect." action={<button className="button button-primary desktop-action" onClick={() => document.getElementById("contact-search")?.focus()}><Icon name="plus" size={17} /> Add contact</button>} />
+      <PageHeading eyebrow="YOUR PEOPLE" title="Contacts" description="People in your circle." action={<button className="button button-primary desktop-action" onClick={() => document.getElementById("contact-search")?.focus()}><Icon name="plus" size={17} /> Add contact</button>} />
       <section className="panel full-panel">
         <label className="search-box contacts-search"><Icon name="search" size={17} /><input id="contact-search" type="search" value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search name or username..." /></label>
-        <div className="contacts-count">{items.length} {items.length === 1 ? "person" : "people"} <span>·</span> Demo contacts</div>
+        <div className="contacts-count">{items.length} {items.length === 1 ? "person" : "people"} <span>·</span> Example contacts</div>
         {items.length > 0 ? (
           <div className="contacts-grid">
             {items.map((contact) => (
               <article className="contact-card" key={contact.handle}>
                 <Avatar initials={contact.initials} color={contact.color} size="large" />
-                <div className="contact-details"><strong>{contact.name}</strong><span>{contact.handle}</span><small><i className={contact.online ? "" : "offline"} />{contact.online ? "Nearby in demo" : "Not currently nearby"}</small></div>
-                <button className="contact-pay" aria-label={`Prepare demo request for ${contact.name}`} onClick={() => onPay(contact)}><Icon name="send" size={16} /></button>
+                <div className="contact-details"><strong>{contact.name}</strong><span>{contact.handle}</span><small><i className={contact.online ? "" : "offline"} />Example contact</small></div>
+                <button className="contact-pay" aria-label={`Send money to ${contact.name}`} onClick={() => onPay(contact)}><Icon name="send" size={16} /></button>
               </article>
             ))}
           </div>
         ) : <EmptyState title="No contacts found" description="Try another name or username." />}
       </section>
-      <p className="page-footnote"><Icon name="shield" size={15} /> Contact details and nearby status are illustrative. No device discovery is active.</p>
+      <p className="page-footnote"><Icon name="shield" size={15} /> Contact details are example data. Contact syncing isn’t connected.</p>
     </>
   );
 }
 
-function ProfileScreen({ onReceive, onNotice, onSignIn, onScan, onDiscover, foundDevice, deviceError }: {
+function ProfileScreen({ onReceive, onNotice, onSignIn, onSignOut, onScan, onDiscover, foundDevice, deviceError }: {
   onReceive: () => void;
   onNotice: (message: string) => void;
   onSignIn: () => void;
+  onSignOut: () => void;
   onScan: () => void;
   onDiscover: () => void;
   foundDevice: string;
   deviceError: string;
 }) {
   const rows: { icon: IconName; label: string; detail: string }[] = [
-    { icon: "qr", label: "My QR code", detail: "Share your demo code" },
+    { icon: "qr", label: "My QR code", detail: "Share your NearPay code" },
     { icon: "scan", label: "Scan a code", detail: "Use camera or enter a code" },
     { icon: "settings", label: "Bluetooth settings", detail: "Discover a browser-visible device" },
     { icon: "settings", label: "App settings", detail: "Manage your preferences" },
     { icon: "help", label: "Help & support", detail: "Get help with NearPay" },
-    { icon: "shield", label: "About NearPay", detail: "Version 1.0 · Frontend preview" },
+    { icon: "shield", label: "About NearPay", detail: "Version 1.0 · Guest access" },
   ];
   return (
     <>
       <PageHeading eyebrow="YOUR ACCOUNT" title="Profile" description="Your account and app preferences." />
       <div className="profile-layout">
         <section className="panel profile-card">
-          <div className="profile-identity"><Avatar initials="S" color="green" size="large" /><div><h2>Shahan</h2><span>@shahan01</span><div className="verified-demo"><i /> Demo account</div></div><button className="button button-outline profile-signin" onClick={onSignIn}>Sign in / create account</button></div>
-          <div className="profile-balance"><div><span>DEMO WALLET BALANCE</span><strong>{formatCurrency(2500)}<small>.00</small></strong><p>Illustrative balance only</p></div><span className="wallet-art profile-wallet"><span>₹</span></span></div>
-          <div className="profile-menu">{rows.map((row) => <button className="profile-menu-item" key={row.label} onClick={row.label === "My QR code" ? onReceive : row.label === "Scan a code" ? onScan : row.label === "Bluetooth settings" ? onDiscover : () => onNotice(`${row.label} is not connected in this demo.`)}><span className="profile-menu-icon"><Icon name={row.icon} size={18} /></span><span className="profile-menu-text"><strong>{row.label}</strong><small>{row.detail}</small></span><Icon name="chevron" size={17} className="menu-chevron" /></button>)}</div>
+          <div className="profile-identity"><Avatar initials="S" color="green" size="large" /><div><h2>Shahan</h2><span>@shahan01</span><div className="guest-label"><i /> Guest profile</div></div><button className="button button-outline profile-signin" onClick={onSignIn}>Sign in</button></div>
+          <div className="profile-balance"><div><span>EXAMPLE BALANCE</span><strong>{formatCurrency(2500)}<small>.00</small></strong><p>Payments aren’t connected</p></div><span className="wallet-art profile-wallet"><span>₹</span></span></div>
+          <div className="profile-menu">{rows.map((row) => <button className="profile-menu-item" key={row.label} onClick={row.label === "My QR code" ? onReceive : row.label === "Scan a code" ? onScan : row.label === "Bluetooth settings" ? onDiscover : () => onNotice(`${row.label} is not connected in this build.`)}><span className="profile-menu-icon"><Icon name={row.icon} size={18} /></span><span className="profile-menu-text"><strong>{row.label}</strong><small>{row.detail}</small></span><Icon name="chevron" size={17} className="menu-chevron" /></button>)}</div>
           {foundDevice && <p className="device-result" role="status"><i /> Found {foundDevice} · not connected</p>}
           {deviceError && <p className="scanner-error" role="alert">{deviceError}</p>}
-          <button className="button button-logout" onClick={() => onNotice("Sign out is unavailable in this demo account.")}><Icon name="logout" size={17} /> Log out</button>
+          <button className="button button-logout" onClick={onSignOut}><Icon name="logout" size={17} /> Sign out</button>
         </section>
         <aside className="profile-aside">
-          <div className="profile-note-icon"><Icon name="shield" size={20} /></div><h3>Just a preview</h3><p>This frontend is a visual demo. No account is authenticated, and wallet values or activity shown here are not real financial information.</p>
-          <div className="profile-note-divider" /><div className="profile-note-row"><span>Account</span><strong>Sample profile</strong></div><div className="profile-note-row"><span>Device access</span><strong>Not active</strong></div><div className="profile-note-row"><span>Payments</span><strong>Not connected</strong></div>
+          <div className="profile-note-icon"><Icon name="shield" size={20} /></div><h3>Account status</h3><p>Sign-in and payment services aren’t connected in this build. The information shown here is illustrative.</p>
+          <div className="profile-note-divider" /><div className="profile-note-row"><span>Account</span><strong>Guest</strong></div><div className="profile-note-row"><span>Device access</span><strong>Browser only</strong></div><div className="profile-note-row"><span>Payments</span><strong>Unavailable</strong></div>
         </aside>
       </div>
     </>
